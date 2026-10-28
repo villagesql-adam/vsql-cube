@@ -136,9 +136,16 @@ SELECT cube_add_dim(cube_add_dim(c, 2.0, 6.0), 3.0, 7.0, 4.0, 8.0),
        cube_add_dim(cube_add_dim(cube_add_dim(c, 2.0, 6.0), 3.0, 7.0), 4.0, 8.0)
   FROM _ta WHERE id = 2;
 
+# The pairs may arrive in one comma-separated string, as the other
+# constructors accept, and give the same cube as separate arguments.
+SELECT cube_add_dim(c, '2,6,3,7'), cube_add_dim(c, 2, 6, 3, 7)
+  FROM _ta WHERE id = 2;
+
 # An odd number of lo/hi values has no lo/hi split.
 --error 3200
 SELECT cube_add_dim(c, 2.0, 6.0, 3.0) FROM _ta WHERE id = 2;
+--error 3200
+SELECT cube_add_dim(c, '2,6,3') FROM _ta WHERE id = 2;
 
 # Exceeding the absolute maximum via a multi-pair call: a cube already at 99
 # dimensions has room for exactly one more, but this asks for two at once, a

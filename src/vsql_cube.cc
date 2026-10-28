@@ -909,7 +909,8 @@ void cube_box_nd_impl(VarArgs args, CustomResultWith<CubeParams> out) {
 // exactly one dimension — the original 3-argument call shape is just the
 // one-pair case of this form.
 void cube_add_dim_prerun(PrerunArgs args, PrerunResult out) {
-  if (args.size() < 3 || !args.type_at(0).is_custom()) {
+  // Two arguments is the string form; the lo/hi count is checked per row.
+  if (args.size() < 2 || !args.type_at(0).is_custom()) {
     out.error("cube_add_dim: needs a cube and at least one lo/hi pair");
     return;
   }
