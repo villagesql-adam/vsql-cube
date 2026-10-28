@@ -116,7 +116,7 @@ Choose `n` to match your actual data. A `cube(3)` column uses 56 bytes per row i
 | `cube_box` | `(lo REAL, hi REAL)` | 1D box |
 | `cube_point_nd` | `(x, y, ...)` | n-D point from its coordinates |
 | `cube_box_nd` | `(lo..., hi...)` | n-D box, lower corner then upper |
-| `cube_add_dim` | `(c cube, lo REAL, hi REAL)` | cube with one more dimension appended |
+| `cube_add_dim` | `(c cube, lo, hi, ...)` | cube with one more dimension for each lo/hi pair |
 
 ```sql
 SELECT cube_point(5.0);                -- (5)
@@ -129,6 +129,7 @@ SELECT cube_point_nd('1,2,3');         -- (1, 2, 3), same point
 CREATE TABLE t (c `cube`(32) NOT NULL);
 INSERT INTO t VALUES ('(1,2)');
 SELECT cube_add_dim(c, 3.0, 4.0) FROM t;  -- (1, 2, 3),(1, 2, 4)
+SELECT cube_add_dim(c, 3.0, 4.0, 5.0, 6.0) FROM t;  -- (1, 2, 3, 5),(1, 2, 4, 6)
 DROP TABLE t;
 ```
 
