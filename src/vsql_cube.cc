@@ -936,9 +936,7 @@ void cube_add_dim_impl(VarArgs args, CustomResultWith<CubeParams> out) {
     int n_vals = gather_coords(args, 1, vals, kAbsoluteMaxDims * 2, why);
     if (n_vals == -2) { out.set_null(); return; }
     if (n_vals < 0) {
-      char msg[VEF_MAX_ERROR_LEN];
-      snprintf(msg, sizeof(msg), "cube_add_dim: %s", why);
-      out.error(msg);
+      out.error(std::string("cube_add_dim: ") + why);
       return;
     }
     if (n_vals % 2 != 0) {
