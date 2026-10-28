@@ -903,14 +903,23 @@ void cube_box_nd_impl(VarArgs args, CustomResultWith<CubeParams> out) {
   }
 }
 
-// CUBE_ADD_DIM(c cube, lo REAL, hi REAL) → cube
-void cube_add_dim_impl(CustomArg c_arg, RealArg lo, RealArg hi,
-                       CustomResultWith<CubeParams> out) {
+// CUBE_ADD_DIM(c cube, lo1, hi1, lo2, hi2, ...) → cube, or
+// CUBE_ADD_DIM(c, 'lo1,hi1,lo2,hi2,...') → cube. Each lo/hi pair appends one
+// new dimension, in argument order, so CUBE_ADD_DIM(c, 2.0, 6.0) still adds
+// exactly one dimension — the original 3-argument call shape is just the
+// one-pair case of this form.
+void cube_add_dim_prerun(PrerunArgs args, PrerunResult out) {
+  if (args.size() < 3 || !args.type_at(0).is_custom()) {
+    out.error("cube_add_dim: needs a cube and at least one lo/hi pair");
+    return;
+  }
+  coord_args_are_sane(args, 1, "cube_add_dim", out);
+}
+
+void cube_add_dim_impl(VarArgs args, CustomResultWith<CubeParams> out) {
   try {
-    if (c_arg.is_null() || lo.is_null() || hi.is_null()) {
-      out.set_null(); return;
-    }
-    auto span = c_arg.value();
+    if (args[0].is_null()) { out.set_null(); return; }
+    auto span = args[0].as_custom();
     int n_slots = cube_n_slots(span.size());
     if (n_slots < 0) {
       out.error("cube_add_dim: invalid input");
@@ -918,17 +927,42 @@ void cube_add_dim_impl(CustomArg c_arg, RealArg lo, RealArg hi,
     }
     CubeData c;
     cube_from_buf(span.data(), n_slots, &c);
-    if (c.ndim >= kAbsoluteMaxDims) {
+
+    // The lo/hi values arrive the same way coordinates do elsewhere in this
+    // file — one per argument, or several in a comma-separated string — so
+    // the same gather reads both shapes.
+    char why[VEF_MAX_ERROR_LEN];
+    double vals[kAbsoluteMaxDims * 2];
+    int n_vals = gather_coords(args, 1, vals, kAbsoluteMaxDims * 2, why);
+    if (n_vals == -2) { out.set_null(); return; }
+    if (n_vals < 0) {
       char msg[VEF_MAX_ERROR_LEN];
-      snprintf(msg, sizeof(msg),
-               "cube_add_dim: already at max %d dimensions", kAbsoluteMaxDims);
+      snprintf(msg, sizeof(msg), "cube_add_dim: %s", why);
       out.error(msg);
       return;
     }
-    int i = c.ndim;
-    c.ll[i] = lo.value();
-    c.ur[i] = hi.value();
-    c.ndim++;
+    if (n_vals % 2 != 0) {
+      char msg[VEF_MAX_ERROR_LEN];
+      snprintf(msg, sizeof(msg),
+               "cube_add_dim: got %d lo/hi value(s); each new dimension "
+               "needs both a lo and a hi, so the count must be even",
+               n_vals);
+      out.error(msg);
+      return;
+    }
+    int n_pairs = n_vals / 2;
+    if (c.ndim + n_pairs > kAbsoluteMaxDims) {
+      char msg[VEF_MAX_ERROR_LEN];
+      snprintf(msg, sizeof(msg), "cube_add_dim: exceeds maximum %d dimensions",
+               kAbsoluteMaxDims);
+      out.error(msg);
+      return;
+    }
+    for (int i = 0; i < n_pairs; i++) {
+      c.ll[c.ndim] = vals[2 * i];
+      c.ur[c.ndim] = vals[2 * i + 1];
+      c.ndim++;
+    }
     cube_normalize(&c);
     set_cube_result_typed(c, out);
   } catch (...) {
@@ -1560,9 +1594,8 @@ VEF_GENERATE_ENTRY_POINTS(
       .build())
     .func(make_func<&cube_add_dim_impl>("cube_add_dim")
       .returns(CUBE)
-      .param(CUBE)
-      .param(REAL)
-      .param(REAL)
+      .varargs()
+      .prerun<&cube_add_dim_prerun>()
       .buffer_size(kMaxStorageSize)
       .deterministic()
       .build())
