@@ -26,9 +26,8 @@ vsql_cube/
 
 ## Prerequisites
 
-- VillageSQL 0.0.4 or later (requires Protocol 3 SDK)
+- VillageSQL 0.0.8 or later (requires Protocol 5 SDK)
 - VillageSQL build directory (with completed build)
-- VillageSQL server source directory (required for Protocol 3 SDK headers)
 - CMake 3.16 or higher
 - C++ compiler with C++17 support
 
@@ -50,27 +49,14 @@ extensions, or if you are working on this extension itself.
 
 ## Building the Extension
 
-**Linux:**
 ```bash
 mkdir build
 cd build
-cmake .. \
-  -DVillageSQL_BUILD_DIR=$HOME/build/villagesql \
-  -DVillageSQL_SOURCE_DIR=$HOME/code/villagesql-server
+cmake .. -DVillageSQL_BUILD_DIR="$HOME/build/villagesql"
 make -j $(getconf _NPROCESSORS_ONLN)
 ```
 
-**macOS:**
-```bash
-mkdir build
-cd build
-cmake .. \
-  -DVillageSQL_BUILD_DIR="$HOME/build/villagesql" \
-  -DVillageSQL_SOURCE_DIR="$HOME/code/villagesql-server"
-make -j $(sysctl -n hw.logicalcpu)
-```
-
-`VillageSQL_BUILD_DIR` points to your VillageSQL build directory. `VillageSQL_SOURCE_DIR` points to the VillageSQL server source — required to pick up Protocol 3 SDK headers.
+`VillageSQL_BUILD_DIR` points to your VillageSQL build directory.
 
 To install the VEB:
 ```bash
@@ -364,10 +350,6 @@ statement.
 
 **"cannot determine type parameters for vsql_cube.cube" error:**
 - The server infers the cube's dimension parameter (`N` in `cube(N)`) from column metadata. When a cube value comes from a VDF constructor rather than a column, no metadata is available. Store the cube in a column and operate on it from there — this is the normal usage pattern. Example: `INSERT INTO t VALUES ('(1,2,3)'); SELECT cube_dim(c) FROM t;`
-
-**Building against a newer server fails:**
-- Ensure `VillageSQL_SOURCE_DIR` is set so cmake picks up Protocol 2 SDK headers
-- Without it, cmake falls back to the staged SDK and VDFs returning custom types will return NULL
 
 ## Reporting Bugs and Requesting Features
 

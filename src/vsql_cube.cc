@@ -900,6 +900,26 @@ static bool bind_reject_custom_coord_arg(BindArgs args, size_t first,
   return false;
 }
 
+// For CUBE_ADD_DIM and CUBE_SUBSET: the source cube's (argument 1's) params,
+// or nullptr when argument 1 is not a cube. A bind hook switches on the
+// server's argument check for argument 1 as well, which rejects a cube whose
+// params are unresolved, such as the result of cube_point() or of another
+// varargs constructor. Such a source is given cube(kDefaultMaxDims), the width
+// an unresolved CustomResultWith<CubeParams> producer falls back to
+// (CubeParams::parse); the impl reads the value's real size, so these calls
+// keep working as they did without a hook. The returned pointer is to
+// `fallback` in that case.
+static const CubeParams *bind_src_params(BindArgs args, BindResult &out,
+                                         CubeParams &fallback) {
+  BindArgType src = args.at(0);
+  if (!src.is_custom() || src.custom_type() != kCubeName) return nullptr;
+  const CubeParams *p = src.params<CubeParams>();
+  if (p != nullptr) return p;
+  fallback = CubeParams{kDefaultMaxDims};
+  out.set_arg(0, kCubeName, fallback);
+  return &fallback;
+}
+
 // CUBE_POINT_ND(x, y, ...) → cube. Each argument names one coordinate, or a
 // comma-separated list of them, so CUBE_POINT_ND('1,2,3') and
 // CUBE_POINT_ND(1, 2, 3) describe the same point.
@@ -915,9 +935,15 @@ void cube_point_nd_prerun(PrerunArgs args, PrerunResult out) {
 // fixed-arity cube function or as the source of an INSERT/CTAS into a cube
 // column -- both fail with "cannot determine type parameters" today.
 void cube_point_nd_bind(BindArgs args, BindResult out) {
-  if (bind_reject_custom_coord_arg(args, 0, out)) return;
-  std::optional<int> n = bind_count_coords(args, 0);
-  if (n && *n >= 1 && *n <= kAbsoluteMaxDims) out.set_return(CubeParams{*n});
+  try {
+    if (bind_reject_custom_coord_arg(args, 0, out)) return;
+    std::optional<int> n = bind_count_coords(args, 0);
+    if (n && *n >= 1 && *n <= kAbsoluteMaxDims) {
+      out.set_return(CubeParams{*n});
+    }
+  } catch (...) {
+    out.error("cube_point_nd: internal error");
+  }
 }
 
 void cube_point_nd_impl(VarArgs args, CustomResultWith<CubeParams> out) {
@@ -952,14 +978,17 @@ void cube_box_nd_prerun(PrerunArgs args, PrerunResult out) {
 // coordinate count (a box needs a lower and an upper corner), under the same
 // conditions as cube_point_nd_bind. An odd or zero count is left unresolved
 // here -- cube_box_nd_impl already reports that case precisely at execution
-// time, and bind time is not the place this run is moving validation to
-// (see PR #30).
+// time.
 void cube_box_nd_bind(BindArgs args, BindResult out) {
-  if (bind_reject_custom_coord_arg(args, 0, out)) return;
-  std::optional<int> n = bind_count_coords(args, 0);
-  if (!n || *n < 2 || *n % 2 != 0) return;
-  int half = *n / 2;
-  if (half <= kAbsoluteMaxDims) out.set_return(CubeParams{half});
+  try {
+    if (bind_reject_custom_coord_arg(args, 0, out)) return;
+    std::optional<int> n = bind_count_coords(args, 0);
+    if (!n || *n < 2 || *n % 2 != 0) return;
+    int half = *n / 2;
+    if (half <= kAbsoluteMaxDims) out.set_return(CubeParams{half});
+  } catch (...) {
+    out.error("cube_box_nd: internal error");
+  }
 }
 
 void cube_box_nd_impl(VarArgs args, CustomResultWith<CubeParams> out) {
@@ -1023,18 +1052,21 @@ void cube_add_dim_prerun(PrerunArgs args, PrerunResult out) {
 // extension's), and the lo/hi arguments under the same rules as
 // cube_point_nd_bind.
 void cube_add_dim_bind(BindArgs args, BindResult out) {
-  if (args.size() < 2) return;
-  if (bind_reject_custom_coord_arg(args, 1, out)) return;
-  BindArgType src = args.at(0);
-  if (!src.is_custom() || src.custom_type() != kCubeName) return;
-  const CubeParams *src_params = src.params<CubeParams>();
-  if (src_params == nullptr) return;
+  try {
+    if (args.size() < 2) return;
+    if (bind_reject_custom_coord_arg(args, 1, out)) return;
+    CubeParams fallback{};
+    const CubeParams *src_params = bind_src_params(args, out, fallback);
+    if (src_params == nullptr) return;
 
-  std::optional<int> added = bind_count_coords(args, 1);
-  if (!added || *added < 2 || *added % 2 != 0) return;
-  int64_t total = src_params->n + (*added / 2);
-  if (total >= 1 && total <= kAbsoluteMaxDims) {
-    out.set_return(CubeParams{total});
+    std::optional<int> added = bind_count_coords(args, 1);
+    if (!added || *added < 2 || *added % 2 != 0) return;
+    int64_t total = src_params->n + (*added / 2);
+    if (total >= 1 && total <= kAbsoluteMaxDims) {
+      out.set_return(CubeParams{total});
+    }
+  } catch (...) {
+    out.error("cube_add_dim: internal error");
   }
 }
 
@@ -1506,10 +1538,18 @@ void cube_subset_prerun(PrerunArgs args, PrerunResult out) {
 // source cube's own params at all, only on how many dimension-number
 // arguments follow it.
 void cube_subset_bind(BindArgs args, BindResult out) {
-  if (args.size() < 2) return;
-  if (bind_reject_custom_coord_arg(args, 1, out)) return;
-  std::optional<int> n = bind_count_coords(args, 1);
-  if (n && *n >= 1 && *n <= kAbsoluteMaxDims) out.set_return(CubeParams{*n});
+  try {
+    if (args.size() < 2) return;
+    if (bind_reject_custom_coord_arg(args, 1, out)) return;
+    CubeParams fallback{};
+    bind_src_params(args, out, fallback);
+    std::optional<int> n = bind_count_coords(args, 1);
+    if (n && *n >= 1 && *n <= kAbsoluteMaxDims) {
+      out.set_return(CubeParams{*n});
+    }
+  } catch (...) {
+    out.error("cube_subset: internal error");
+  }
 }
 
 void cube_subset_impl(VarArgs args, CustomResultWith<CubeParams> out) {

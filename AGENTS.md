@@ -7,7 +7,7 @@ This file provides guidance to AI coding assistants when working with the vsql_c
 ## Project Overview
 
 vsql_cube is a VillageSQL extension implementing the `cube` custom type — an n-dimensional box/point
-representation compatible with PostgreSQL's cube extension. It uses the Protocol V3 stable SDK and the
+representation compatible with PostgreSQL's cube extension. It uses the Protocol V5 stable SDK and the
 typed builder API. All implementation lives in a single source file: `src/vsql_cube.cc`.
 
 ## Key Facts
@@ -21,7 +21,7 @@ typed builder API. All implementation lives in a single source file: `src/vsql_c
     `Type 'vsql_cube.cube' requires a length specification`
   - Maximum: `cube(100)` = 1608 bytes (kMaxStorageSize)
 - **Max dimensions**: 100 absolute maximum (kAbsoluteMaxDims); default column width is 32 (kDefaultMaxDims)
-- **Protocol**: V3 stable (uses staged SDK via `VillageSQL_BUILD_DIR`; `VillageSQL_SOURCE_DIR` not required)
+- **Protocol**: V5 stable (uses staged SDK via `VillageSQL_BUILD_DIR`; `VillageSQL_SOURCE_DIR` not required)
 
 ## Build
 
@@ -75,7 +75,7 @@ constexpr size_t kMaxDecodeLen       = 5200; // output buffer for cube_to_string
 
 ## VEF API Patterns
 
-This extension uses the Protocol V3 stable SDK throughout. Key patterns:
+This extension uses the Protocol V5 stable SDK throughout. Key patterns:
 
 ### Custom type registration
 
@@ -208,10 +208,12 @@ Unquoted `cube` in column type position fails with a parser error. This affects 
 that require persistent tables — derived-table workarounds don't work because custom type values
 don't survive UNION ALL materialization.
 
-VDF constructors (`cube_point`, `cube_box`, etc.) return the base `cube` type without column
-parameters. Inserting a VDF result into a `` `cube`(N) `` column fails with a type-key mismatch
-("Cannot implicitly cast from vsql_cube.cube to vsql_cube.cube(N)"). Use string literals for
-all column INSERTs — they go through `cube_encode`, which has the column's storage context.
+The fixed-arity constructors (`cube_point`, `cube_box`, etc.) return the base `cube` type without
+column parameters. The varargs constructors (`cube_point_nd`, `cube_box_nd`, `cube_add_dim`,
+`cube_subset`) resolve `cube(n)` when every coordinate is an INT or REAL expression or a constant,
+so `INSERT ... SELECT cube_point_nd(1.0, 2.0, 3.0)` into a `` `cube`(3) `` column works. Inserting a fixed-arity constructor's result into a `` `cube`(N) `` column fails
+with a type-key mismatch ("Cannot implicitly cast from vsql_cube.cube to vsql_cube.cube(N)").
+Use string literals for those INSERTs — they go through `cube_encode`, which has the column's storage context.
 
 ## Known Limitations
 

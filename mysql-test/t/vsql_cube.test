@@ -228,6 +228,25 @@ DROP TABLE t_bind_subset;
 --error ER_VILLAGESQL_GENERIC_ERROR
 SELECT cube_dim(cube_point_nd(coords)) FROM (SELECT '4.0,5.0,6.0' AS coords) AS s;
 
+# cube_box_nd as the source of CREATE TABLE ... AS SELECT and INSERT ... SELECT.
+CREATE TABLE t_bind_box AS SELECT cube_box_nd(1.0, 2.0, 4.0, 5.0) AS c;
+INSERT INTO t_bind_box SELECT cube_box_nd('0,0', '1,1');
+SELECT cube_to_string(c) FROM t_bind_box;
+DROP TABLE t_bind_box;
+
+# cube_add_dim and cube_subset still accept a source cube whose cube(n) is
+# unresolved: the result of cube_point, cube_box, another varargs
+# constructor fed a column, or a cube(100) column plus added dimensions.
+SELECT cube_add_dim(cube_point(1.0), 2.0, 6.0);
+SELECT cube_subset(cube_point(1.0), 1);
+SELECT cube_add_dim(cube_box(1.0, 5.0), 2.0, 6.0);
+SELECT cube_subset(cube_point_nd(coords), 1)
+  FROM (SELECT '4.0,5.0,6.0' AS coords) AS s;
+CREATE TABLE _t100w (c `cube`(100) NOT NULL);
+INSERT INTO _t100w VALUES ('(1,2)');
+SELECT cube_add_dim(cube_add_dim(c, 3.0, 4.0), 5.0, 6.0) FROM _t100w;
+DROP TABLE _t100w;
+
 --echo #
 --echo # NULL handling
 --echo #
