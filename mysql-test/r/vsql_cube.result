@@ -287,6 +287,57 @@ SELECT cube_add_dim(cube_add_dim(c, 3.0, 4.0), 5.0, 6.0) FROM _t100w;
 cube_add_dim(cube_add_dim(c, 3.0, 4.0), 5.0, 6.0)
 (1, 2, 3, 5),(1, 2, 4, 6)
 DROP TABLE _t100w;
+SET @v = '1,2', @p = '1,2';
+PREPARE s FROM 'SELECT cube_dim(cube_point_nd(@v)), cube_dim(cube_box_nd(@v, @v)),
+  cube_dim(cube_add_dim(cube_point(1.0), @p)),
+  cube_dim(cube_subset(cube_point_nd(1.0, 2.0, 3.0), @v))';
+EXECUTE s;
+cube_dim(cube_point_nd(@v))	cube_dim(cube_box_nd(@v, @v))	cube_dim(cube_add_dim(cube_point(1.0), @p))	cube_dim(cube_subset(cube_point_nd(1.0, 2.0, 3.0), @v))
+2	2	2	2
+SET @v = '1,2,3', @p = '1,2,3,4';
+EXECUTE s;
+cube_dim(cube_point_nd(@v))	cube_dim(cube_box_nd(@v, @v))	cube_dim(cube_add_dim(cube_point(1.0), @p))	cube_dim(cube_subset(cube_point_nd(1.0, 2.0, 3.0), @v))
+3	3	3	3
+PREPARE s FROM 'SELECT cube_dim(cube_point_nd(?))';
+SET @v = '1,2';
+EXECUTE s USING @v;
+cube_dim(cube_point_nd(?))
+2
+SET @v = '1,2,3';
+EXECUTE s USING @v;
+cube_dim(cube_point_nd(?))
+3
+DEALLOCATE PREPARE s;
+CREATE PROCEDURE p_bind(IN v VARCHAR(50), IN p VARCHAR(50))
+BEGIN
+SELECT cube_dim(cube_point_nd(v)), cube_dim(cube_box_nd(v, v)),
+cube_dim(cube_add_dim(cube_point(1.0), p)),
+cube_dim(cube_subset(cube_point_nd(1.0, 2.0, 3.0), v));
+END//
+CALL p_bind('1,2', '1,2');
+cube_dim(cube_point_nd(v))	cube_dim(cube_box_nd(v, v))	cube_dim(cube_add_dim(cube_point(1.0), p))	cube_dim(cube_subset(cube_point_nd(1.0, 2.0, 3.0), v))
+2	2	2	2
+CALL p_bind('1,2,3', '1,2,3,4');
+cube_dim(cube_point_nd(v))	cube_dim(cube_box_nd(v, v))	cube_dim(cube_add_dim(cube_point(1.0), p))	cube_dim(cube_subset(cube_point_nd(1.0, 2.0, 3.0), v))
+3	3	3	3
+DROP PROCEDURE p_bind;
+SELECT cube_dim(cube_point_nd(1.0, NULL));
+ERROR HY000: Cannot initialize function 'cube_dim': cannot determine type parameters for vsql_cube.cube in argument 1
+SELECT cube_add_dim(cube_point_nd(1.0, NULL), 2.0, 3.0) IS NULL AS null_in_null_out;
+null_in_null_out
+1
+SELECT cube_dim(cube_point_nd('1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,90,91,92,93,94,95,96,97,98,99,100')) AS c100;
+c100
+100
+SELECT cube_dim(cube_point_nd('1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,90,91,92,93,94,95,96,97,98,99,100,101')) AS c101;
+ERROR HY000: Cannot initialize function 'cube_dim': cannot determine type parameters for vsql_cube.cube in argument 1
+SELECT cube_dim(cube_box_nd('1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,90,91,92,93,94,95,96,97,98,99,100', '1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,90,91,92,93,94,95,96,97,98,99,100')) AS c100;
+c100
+100
+SELECT cube_dim(cube_box_nd('1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,90,91,92,93,94,95,96,97,98,99,100,101', '1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,90,91,92,93,94,95,96,97,98,99,100,101')) AS c101;
+ERROR HY000: Cannot initialize function 'cube_dim': cannot determine type parameters for vsql_cube.cube in argument 1
+SELECT cube_dim(cube_box_nd(1.0, 2.0, 3.0));
+ERROR HY000: Cannot initialize function 'cube_dim': cannot determine type parameters for vsql_cube.cube in argument 1
 #
 # NULL handling
 #
