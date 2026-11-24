@@ -68,7 +68,7 @@ cube_point_nd(coords)
 SELECT cube_box_nd(1.0, 2.0, 3.0);
 ERROR HY000: VDF error in function 'cube_box_nd': cube_box_nd: got 3 coordinates; a box needs an even number, half the lower corner and half the upper
 SELECT cube_point_nd(cube_point(1.0));
-ERROR HY000: Can't initialize function 'cube_point_nd'; cube_point_nd: argument 1 is a cube, not a coordinate
+ERROR HY000: Cannot initialize function 'cube_point_nd': argument 1 is a cube, not a coordinate
 SELECT cube_point_nd(1.0, NULL, 3.0) IS NULL AS null_in_null_out;
 null_in_null_out
 1
@@ -197,6 +197,70 @@ cube_dim(c)
 SELECT cube_add_dim(c, 1.0, 2.0, 3.0, 4.0) FROM _t99;
 ERROR HY000: VDF error in function 'cube_add_dim': cube_add_dim: exceeds maximum 100 dimensions
 DROP TABLE _t99;
+#
+# bind_and_check_types: varargs constructors resolve a return type
+#
+# Before this, none of the four varargs constructors told the server
+# their return type's dimension count at resolution time: the result
+# was usable in a bare top-level SELECT but failed with "cannot
+# determine type parameters" (error 3219) as an argument to a
+# fixed-arity cube function, or as the source of an INSERT/CTAS into a
+# cube column. A bind_and_check_types hook on each now resolves it
+# whenever every coordinate argument is a number or a constant string
+# (not a column), so the count is knowable before any row is read.
+#
+SELECT cube_dim(cube_point_nd(1.0, 2.0, 3.0));
+cube_dim(cube_point_nd(1.0, 2.0, 3.0))
+3
+SELECT cube_dim(cube_point_nd('1.0,2.0,3.0'));
+cube_dim(cube_point_nd('1.0,2.0,3.0'))
+3
+SELECT cube_dim(cube_box_nd(1.0, 2.0, 4.0, 5.0));
+cube_dim(cube_box_nd(1.0, 2.0, 4.0, 5.0))
+2
+SELECT cube_dim(cube_box_nd('1.0,2.0', '4.0,5.0'));
+cube_dim(cube_box_nd('1.0,2.0', '4.0,5.0'))
+2
+CREATE TABLE t_bind_point AS SELECT cube_point_nd(1.0, 2.0, 3.0) AS c;
+SELECT cube_dim(c), cube_to_string(c) FROM t_bind_point;
+cube_dim(c)	cube_to_string(c)
+3	(1, 2, 3)
+DROP TABLE t_bind_point;
+CREATE TABLE t_bind_insert (c `cube`(3) NOT NULL);
+INSERT INTO t_bind_insert SELECT cube_point_nd(1.0, 2.0, 3.0);
+SELECT cube_to_string(c) FROM t_bind_insert;
+cube_to_string(c)
+(1, 2, 3)
+DROP TABLE t_bind_insert;
+SELECT cube_dim(cube_add_dim(c, 2.0, 6.0)) FROM _ta WHERE id = 2;
+cube_dim(cube_add_dim(c, 2.0, 6.0))
+2
+SELECT cube_dim(cube_add_dim(c, '2,6')) FROM _ta WHERE id = 2;
+cube_dim(cube_add_dim(c, '2,6'))
+2
+SELECT cube_dim(cube_add_dim(c, 2.0, 6.0, 3.0, 7.0)) FROM _ta WHERE id = 2;
+cube_dim(cube_add_dim(c, 2.0, 6.0, 3.0, 7.0))
+3
+CREATE TABLE t_bind_add AS
+SELECT cube_add_dim(c, 2.0, 6.0) AS c FROM _ta WHERE id = 2;
+SELECT cube_dim(c) FROM t_bind_add;
+cube_dim(c)
+2
+DROP TABLE t_bind_add;
+SELECT cube_dim(cube_subset(c, 1, 3)) FROM _ta WHERE id = 3;
+cube_dim(cube_subset(c, 1, 3))
+2
+SELECT cube_dim(cube_subset(c, '1,3')) FROM _ta WHERE id = 3;
+cube_dim(cube_subset(c, '1,3'))
+2
+CREATE TABLE t_bind_subset AS
+SELECT cube_subset(c, 1, 3) AS c FROM _ta WHERE id = 3;
+SELECT cube_dim(c) FROM t_bind_subset;
+cube_dim(c)
+2
+DROP TABLE t_bind_subset;
+SELECT cube_dim(cube_point_nd(coords)) FROM (SELECT '4.0,5.0,6.0' AS coords) AS s;
+ERROR HY000: Cannot initialize function 'cube_dim': cannot determine type parameters for vsql_cube.cube in argument 1
 #
 # NULL handling
 #

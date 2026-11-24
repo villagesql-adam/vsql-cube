@@ -39,6 +39,7 @@
 #include <cstdio>
 #include <cstring>
 #include <map>
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -826,11 +827,97 @@ static bool coord_args_are_sane(PrerunArgs args, size_t first,
   return true;
 }
 
+// Counts the coordinates that arguments `first` onward of a bind-time call
+// would contribute, when that count can be known before any row is read: an
+// int or real argument contributes one, a string argument contributes one
+// per comma-separated token but only when it is a constant the server could
+// evaluate at resolution time (BindArgType::has_const_value()). A column, a
+// bind placeholder, or a malformed constant makes the total unknowable here,
+// so this returns nullopt rather than guess -- the caller then leaves the
+// return type's parameters unset, exactly as if this hook did not exist, and
+// execution-time validation (coord_args_are_sane / gather_coords) still runs
+// and still reports any real problem. This mirrors gather_coords' own
+// one-coordinate-per-numeric-argument, comma-list-per-string-argument rule,
+// but only ever counts -- it never validates a value.
+static std::optional<int> bind_count_coords(BindArgs args, size_t first) {
+  int total = 0;
+  for (size_t i = first; i < args.size(); i++) {
+    BindArgType a = args.at(i);
+    if (a.is_int() || a.is_real()) {
+      total += 1;
+      continue;
+    }
+    if (a.is_str() && a.has_const_value()) {
+      double tmp[kAbsoluteMaxDims];
+      char why[VEF_MAX_ERROR_LEN];
+      int got = parse_coord_csv(a.const_value(), tmp, why);
+      if (got < 0) return std::nullopt;  // malformed constant; let execution
+                                          // time report it with its own
+                                          // message, same as today.
+      total += got;
+      continue;
+    }
+    // A non-constant string (a column), a custom-typed argument, or anything
+    // else cannot be counted before a row is read.
+    return std::nullopt;
+  }
+  return total;
+}
+
+// Rejects, at bind time, an argument from `first` onward that cannot name a
+// coordinate because it is itself a custom type -- the same one mistake
+// coord_args_are_sane also catches, at prerun. Returns true once it has
+// called out.error() (the caller should do nothing further).
+//
+// This exists because giving a varargs function ANY bind_and_check_types
+// hook also switches on the server's general argument-type validation for
+// that call: a hookless varargs call takes a shortcut that defers all
+// argument checking to prerun, and attaching a hook turns that shortcut off
+// for every argument, not just the ones the hook resolves. Without this
+// check, a custom-typed coordinate argument this hook leaves unresolved
+// (because it is not a number or a constant string) would reach a generic
+// "cannot determine type parameters" error from deeper in the type system,
+// at the same point in time, instead of this function's own message -- a
+// real wording regression, not a correctness one, confirmed live via
+// `cube_point_nd(cube_point(1.0))`, which used to fail with
+// ER_CANT_INITIALIZE_UDF and this function's own message from prerun, and
+// without this check would instead fail with a generic ER_VILLAGESQL_GENERIC_ERROR
+// and a generic message from the same place bind_and_check_types itself
+// reports through.
+static bool bind_reject_custom_coord_arg(BindArgs args, size_t first,
+                                         BindResult &out) {
+  for (size_t i = first; i < args.size(); i++) {
+    BindArgType a = args.at(i);
+    if (a.is_custom()) {
+      char msg[VEF_MAX_ERROR_LEN];
+      snprintf(msg, sizeof(msg), "argument %zu is a %.*s, not a coordinate",
+               i + 1, static_cast<int>(a.custom_type().size()),
+               a.custom_type().data());
+      out.error(msg);
+      return true;
+    }
+  }
+  return false;
+}
+
 // CUBE_POINT_ND(x, y, ...) → cube. Each argument names one coordinate, or a
 // comma-separated list of them, so CUBE_POINT_ND('1,2,3') and
 // CUBE_POINT_ND(1, 2, 3) describe the same point.
 void cube_point_nd_prerun(PrerunArgs args, PrerunResult out) {
   coord_args_are_sane(args, 0, "cube_point_nd", out);
+}
+
+// Resolves CUBE_POINT_ND(...)'s return type to cube(n), n = the coordinate
+// count, when every argument is one this hook can count up front (see
+// bind_count_coords). Without this, the call's result type carries no "n" at
+// all, which is fine for a bare top-level SELECT (display doesn't need
+// resolved params) but leaves the value unusable as an argument to a
+// fixed-arity cube function or as the source of an INSERT/CTAS into a cube
+// column -- both fail with "cannot determine type parameters" today.
+void cube_point_nd_bind(BindArgs args, BindResult out) {
+  if (bind_reject_custom_coord_arg(args, 0, out)) return;
+  std::optional<int> n = bind_count_coords(args, 0);
+  if (n && *n >= 1 && *n <= kAbsoluteMaxDims) out.set_return(CubeParams{*n});
 }
 
 void cube_point_nd_impl(VarArgs args, CustomResultWith<CubeParams> out) {
@@ -859,6 +946,20 @@ void cube_point_nd_impl(VarArgs args, CustomResultWith<CubeParams> out) {
 // CUBE_BOX_ND(1, 2, 4, 5) describe the same box.
 void cube_box_nd_prerun(PrerunArgs args, PrerunResult out) {
   coord_args_are_sane(args, 0, "cube_box_nd", out);
+}
+
+// Resolves CUBE_BOX_ND(...)'s return type to cube(n), n = half the
+// coordinate count (a box needs a lower and an upper corner), under the same
+// conditions as cube_point_nd_bind. An odd or zero count is left unresolved
+// here -- cube_box_nd_impl already reports that case precisely at execution
+// time, and bind time is not the place this run is moving validation to
+// (see PR #30).
+void cube_box_nd_bind(BindArgs args, BindResult out) {
+  if (bind_reject_custom_coord_arg(args, 0, out)) return;
+  std::optional<int> n = bind_count_coords(args, 0);
+  if (!n || *n < 2 || *n % 2 != 0) return;
+  int half = *n / 2;
+  if (half <= kAbsoluteMaxDims) out.set_return(CubeParams{half});
 }
 
 void cube_box_nd_impl(VarArgs args, CustomResultWith<CubeParams> out) {
@@ -911,6 +1012,30 @@ void cube_add_dim_prerun(PrerunArgs args, PrerunResult out) {
     return;
   }
   coord_args_are_sane(args, 1, "cube_add_dim", out);
+}
+
+// Resolves CUBE_ADD_DIM(c, ...)'s return type to cube(n + pairs), where n is
+// the source cube's own resolved dimension count and pairs is the number of
+// lo/hi pairs the remaining arguments contribute. Both halves have to be
+// knowable at bind time: the source argument's params only when it is itself
+// a "cube" (checked by name, not just is_custom(), since params<CubeParams>()
+// would otherwise reinterpret an unrelated custom type's params as this
+// extension's), and the lo/hi arguments under the same rules as
+// cube_point_nd_bind.
+void cube_add_dim_bind(BindArgs args, BindResult out) {
+  if (args.size() < 2) return;
+  if (bind_reject_custom_coord_arg(args, 1, out)) return;
+  BindArgType src = args.at(0);
+  if (!src.is_custom() || src.custom_type() != kCubeName) return;
+  const CubeParams *src_params = src.params<CubeParams>();
+  if (src_params == nullptr) return;
+
+  std::optional<int> added = bind_count_coords(args, 1);
+  if (!added || *added < 2 || *added % 2 != 0) return;
+  int64_t total = src_params->n + (*added / 2);
+  if (total >= 1 && total <= kAbsoluteMaxDims) {
+    out.set_return(CubeParams{total});
+  }
 }
 
 void cube_add_dim_impl(VarArgs args, CustomResultWith<CubeParams> out) {
@@ -1376,6 +1501,17 @@ void cube_subset_prerun(PrerunArgs args, PrerunResult out) {
   coord_args_are_sane(args, 1, "cube_subset", out);
 }
 
+// Resolves CUBE_SUBSET(c, ...)'s return type to cube(n), n = the count of
+// requested dimensions -- unlike cube_add_dim, this does not depend on the
+// source cube's own params at all, only on how many dimension-number
+// arguments follow it.
+void cube_subset_bind(BindArgs args, BindResult out) {
+  if (args.size() < 2) return;
+  if (bind_reject_custom_coord_arg(args, 1, out)) return;
+  std::optional<int> n = bind_count_coords(args, 1);
+  if (n && *n >= 1 && *n <= kAbsoluteMaxDims) out.set_return(CubeParams{*n});
+}
+
 void cube_subset_impl(VarArgs args, CustomResultWith<CubeParams> out) {
   try {
     if (args[0].is_null()) { out.set_null(); return; }
@@ -1575,6 +1711,7 @@ VEF_GENERATE_ENTRY_POINTS(
       .returns(CUBE)
       .varargs()
       .prerun<&cube_point_nd_prerun>()
+      .bind_and_check_types<&cube_point_nd_bind>()
       .buffer_size(kMaxStorageSize)
       .deterministic()
       .build())
@@ -1582,6 +1719,7 @@ VEF_GENERATE_ENTRY_POINTS(
       .returns(CUBE)
       .varargs()
       .prerun<&cube_box_nd_prerun>()
+      .bind_and_check_types<&cube_box_nd_bind>()
       .buffer_size(kMaxStorageSize)
       .deterministic()
       .build())
@@ -1589,6 +1727,7 @@ VEF_GENERATE_ENTRY_POINTS(
       .returns(CUBE)
       .varargs()
       .prerun<&cube_add_dim_prerun>()
+      .bind_and_check_types<&cube_add_dim_bind>()
       .buffer_size(kMaxStorageSize)
       .deterministic()
       .build())
@@ -1690,6 +1829,7 @@ VEF_GENERATE_ENTRY_POINTS(
       .returns(CUBE)
       .varargs()
       .prerun<&cube_subset_prerun>()
+      .bind_and_check_types<&cube_subset_bind>()
       .buffer_size(kMaxStorageSize)
       .deterministic()
       .build())

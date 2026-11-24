@@ -65,8 +65,12 @@ SELECT cube_point_nd(coords) FROM (SELECT '4.0,5.0,6.0' AS coords) AS s;
 --error 3200
 SELECT cube_box_nd(1.0, 2.0, 3.0);
 # A cube argument is refused before any row is read, so this is an
-# initialization error rather than a per-row VDF error.
---error ER_CANT_INITIALIZE_UDF
+# initialization error rather than a per-row VDF error. Caught by the
+# bind_and_check_types hook itself (added so this function's return type can
+# be resolved -- see "bind_and_check_types" below), which reports it through
+# the generic ER_VILLAGESQL_GENERIC_ERROR rather than ER_CANT_INITIALIZE_UDF,
+# but with the same "not a coordinate" wording prerun always used here.
+--error ER_VILLAGESQL_GENERIC_ERROR
 SELECT cube_point_nd(cube_point(1.0));
 # NULL propagates rather than erroring.
 SELECT cube_point_nd(1.0, NULL, 3.0) IS NULL AS null_in_null_out;
@@ -157,6 +161,72 @@ SELECT cube_dim(c) FROM _t99;
 --error 3200
 SELECT cube_add_dim(c, 1.0, 2.0, 3.0, 4.0) FROM _t99;
 DROP TABLE _t99;
+
+--echo #
+--echo # bind_and_check_types: varargs constructors resolve a return type
+--echo #
+--echo # Before this, none of the four varargs constructors told the server
+--echo # their return type's dimension count at resolution time: the result
+--echo # was usable in a bare top-level SELECT but failed with "cannot
+--echo # determine type parameters" (error 3219) as an argument to a
+--echo # fixed-arity cube function, or as the source of an INSERT/CTAS into a
+--echo # cube column. A bind_and_check_types hook on each now resolves it
+--echo # whenever every coordinate argument is a number or a constant string
+--echo # (not a column), so the count is knowable before any row is read.
+--echo #
+
+# cube_point_nd / cube_box_nd, both call shapes, nested inside a fixed-arity
+# function -- this failed with error 3219 before this change.
+SELECT cube_dim(cube_point_nd(1.0, 2.0, 3.0));
+SELECT cube_dim(cube_point_nd('1.0,2.0,3.0'));
+SELECT cube_dim(cube_box_nd(1.0, 2.0, 4.0, 5.0));
+SELECT cube_dim(cube_box_nd('1.0,2.0', '4.0,5.0'));
+
+# cube_point_nd as the source of CREATE TABLE ... AS SELECT and
+# INSERT ... SELECT -- both also failed with error 3219 before this change.
+CREATE TABLE t_bind_point AS SELECT cube_point_nd(1.0, 2.0, 3.0) AS c;
+SELECT cube_dim(c), cube_to_string(c) FROM t_bind_point;
+DROP TABLE t_bind_point;
+
+CREATE TABLE t_bind_insert (c `cube`(3) NOT NULL);
+INSERT INTO t_bind_insert SELECT cube_point_nd(1.0, 2.0, 3.0);
+SELECT cube_to_string(c) FROM t_bind_insert;
+DROP TABLE t_bind_insert;
+
+# cube_add_dim: the resolved return type's dimension CAPACITY (its cube(n)
+# parameter) is the source argument's own resolved capacity plus the number
+# of lo/hi pairs -- in both the separate-argument and the comma-separated-
+# string shape, and whether one pair or several arrive in the call.
+# cube_dim() below reports each row's actual coordinate count, a property of
+# the value rather than of this resolved capacity, so it is not expected to
+# match the pair arithmetic -- it is here only to confirm the nested call no
+# longer fails to resolve a type at all.
+SELECT cube_dim(cube_add_dim(c, 2.0, 6.0)) FROM _ta WHERE id = 2;
+SELECT cube_dim(cube_add_dim(c, '2,6')) FROM _ta WHERE id = 2;
+SELECT cube_dim(cube_add_dim(c, 2.0, 6.0, 3.0, 7.0)) FROM _ta WHERE id = 2;
+CREATE TABLE t_bind_add AS
+  SELECT cube_add_dim(c, 2.0, 6.0) AS c FROM _ta WHERE id = 2;
+SELECT cube_dim(c) FROM t_bind_add;
+DROP TABLE t_bind_add;
+
+# cube_subset: the resolved return type's dimension capacity is the number
+# of dimensions requested, independent of the source cube's own capacity --
+# both call shapes. Unlike cube_add_dim above, a subset's value always fills
+# its whole resolved capacity, so cube_dim() here does equal the requested
+# count.
+SELECT cube_dim(cube_subset(c, 1, 3)) FROM _ta WHERE id = 3;
+SELECT cube_dim(cube_subset(c, '1,3')) FROM _ta WHERE id = 3;
+CREATE TABLE t_bind_subset AS
+  SELECT cube_subset(c, 1, 3) AS c FROM _ta WHERE id = 3;
+SELECT cube_dim(c) FROM t_bind_subset;
+DROP TABLE t_bind_subset;
+
+# A column-sourced coordinate argument still cannot be counted before a row
+# is read, so the return type stays unresolved and using the result as an
+# argument to a fixed-arity function still fails exactly as before this
+# change -- a correctness bound of the fix, not a regression it introduces.
+--error ER_VILLAGESQL_GENERIC_ERROR
+SELECT cube_dim(cube_point_nd(coords)) FROM (SELECT '4.0,5.0,6.0' AS coords) AS s;
 
 --echo #
 --echo # NULL handling
